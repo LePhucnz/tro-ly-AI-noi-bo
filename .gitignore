@@ -21,3 +21,11 @@ htmlcov/
 *.swp
 *.swo
 
+# Environment variables & Secrets
+.env
+.env.local
+
+# ChromaDB & Vector Storage data
+data/
+chroma_db/
+

@@ -13,6 +13,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api.routes import router as api_router
+from api.ingest_routes import router as ingest_router
+from core.exceptions import setup_exception_handlers
+from rag.engine import CleanRAGCore
+from services.rag_core_interface import register_rag_core
 
 # Thiết lập logging
 logging.basicConfig(
@@ -26,6 +30,13 @@ logger = logging.getLogger("rag_server")
 async def lifespan(app: FastAPI):
     """Quản lý vòng đời khởi động và kết thúc của ứng dụng."""
     logger.info("Khởi động FastAPI RAG Backend Service...")
+    # Tự động đăng ký CleanRAGCore với ChromaDB Persistent Storage
+    try:
+        clean_rag = CleanRAGCore()
+        register_rag_core(clean_rag)
+        logger.info("Đã đăng ký CleanRAGCore (ChromaDB + Advanced Retriever) thành công.")
+    except Exception as exc:
+        logger.warning("Sử dụng fallback RAG Core do: %s", exc)
     yield
     logger.info("Dừng FastAPI RAG Backend Service. Giải phóng tài nguyên.")
 
@@ -51,8 +62,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Đăng ký Router
+# Đăng ký Routers
 app.include_router(api_router)
+app.include_router(ingest_router)
+
+# Đăng ký Domain Exception Handlers
+setup_exception_handlers(app)
 
 
 @app.get("/", tags=["General"])

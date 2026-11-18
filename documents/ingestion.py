@@ -21,6 +21,7 @@ from core.exceptions import (
 from documents.hasher import DocumentHasher, DocumentHashRegistry
 from documents.loader_factory import Document, DocumentLoaderFactory
 from documents.splitter import DocumentSplitter
+from documents.text_cleaner import TextCleaner, get_text_cleaner
 
 logger = logging.getLogger("document_ingestion_pipeline")
 
@@ -70,9 +71,11 @@ class DocumentIngestionPipeline:
         self,
         splitter: Optional[DocumentSplitter] = None,
         hash_registry: Optional[DocumentHashRegistry] = None,
+        text_cleaner: Optional[TextCleaner] = None,
     ) -> None:
         self.splitter = splitter or DocumentSplitter()
         self.registry = hash_registry or DocumentHashRegistry()
+        self.text_cleaner = text_cleaner or get_text_cleaner()
 
     def process_file(
         self,
@@ -119,8 +122,11 @@ class DocumentIngestionPipeline:
         # 1. Đọc tài liệu qua Loader Factory
         raw_docs = DocumentLoaderFactory.load_document(path)
 
+        # 1.5 Tiền xử lý: loại bỏ header/footer trang, chuẩn hóa khoảng trắng
+        cleaned_docs = self.text_cleaner.clean_documents(raw_docs)
+
         # 2. Chia tách văn bản thành các chunks
-        chunks = self.splitter.split_documents(raw_docs)
+        chunks = self.splitter.split_documents(cleaned_docs)
 
         # 3. Chống trùng lặp ở cấp độ chunk
         new_chunks: List[Document] = []

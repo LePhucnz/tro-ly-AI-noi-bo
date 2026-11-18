@@ -27,21 +27,13 @@ from core.exceptions import (
 from documents.hasher import DocumentHasher
 from documents.ingestion import DocumentIngestionPipeline, IngestionResult
 from documents.loader_factory import DocumentLoaderFactory
-from rag.vector_store import ChromaVectorStoreManager
+from rag.vector_store import ChromaVectorStoreManager, get_vector_store_manager
 
 logger = logging.getLogger("api_ingest_routes")
 router = APIRouter(prefix="/api/v1/documents", tags=["Document Ingestion & Vector Store"])
 
 # Singleton instances
-_vector_store_manager: Optional[ChromaVectorStoreManager] = None
 _ingestion_pipeline: Optional[DocumentIngestionPipeline] = None
-
-
-def get_vector_store_manager() -> ChromaVectorStoreManager:
-    global _vector_store_manager
-    if _vector_store_manager is None:
-        _vector_store_manager = ChromaVectorStoreManager()
-    return _vector_store_manager
 
 
 def get_ingestion_pipeline() -> DocumentIngestionPipeline:

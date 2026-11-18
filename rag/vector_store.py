@@ -163,10 +163,28 @@ class ChromaVectorStoreManager:
             logger.exception("Không thể khởi tạo ChromaDB: %s", e)
             raise VectorStoreConnectionError(self.persist_directory, str(e))
 
+    def get_collection(self) -> Any:
+        """Đảm bảo luôn lấy collection hợp lệ từ ChromaDB client."""
+        if self._client is not None:
+            try:
+                if self._collection is not None:
+                    self._collection.count()
+                    return self._collection
+            except Exception:
+                pass
+            try:
+                self._collection = self._client.get_or_create_collection(
+                    name=self.collection_name,
+                    metadata={"hnsw:space": "cosine"},
+                )
+            except Exception as e:
+                logger.warning("Không thể lấy hoặc tạo collection ChromaDB: %s", e)
+        return self._collection
+
     @property
     def is_native_chroma(self) -> bool:
         """Kiểm tra có đang sử dụng ChromaDB gốc hay không."""
-        return self._collection is not None
+        return self._client is not None and self.get_collection() is not None
 
     def get_existing_ids(self, ids: List[str]) -> Set[str]:
         """
@@ -176,9 +194,10 @@ class ChromaVectorStoreManager:
         if not ids:
             return set()
 
-        if self.is_native_chroma:
+        col = self.get_collection()
+        if col is not None:
             try:
-                res = self._collection.get(ids=ids)
+                res = col.get(ids=ids)
                 existing = set(res.get("ids", []))
                 return existing
             except Exception as e:
@@ -263,7 +282,11 @@ class ChromaVectorStoreManager:
                             clean_m[k] = str(v)
                     clean_metadatas.append(clean_m)
 
-                self._collection.upsert(
+                col = self.get_collection()
+                if col is None:
+                    raise VectorStoreError("Không thể kết nối đến collection ChromaDB.")
+
+                col.upsert(
                     ids=ids_to_add,
                     embeddings=embeddings,
                     documents=contents,
@@ -283,19 +306,37 @@ class ChromaVectorStoreManager:
 
     def count(self) -> int:
         """Đếm tổng số chunk tài liệu trong collection."""
-        if self.is_native_chroma:
-            return self._collection.count()
+        col = self.get_collection()
+        if col is not None:
+            return col.count()
         return len(self._in_memory_docs)
 
     def reset(self) -> None:
         """Xóa toàn bộ dữ liệu trong collection hiện tại."""
-        if self.is_native_chroma:
+        if self._client is not None:
             try:
                 self._client.delete_collection(self.collection_name)
+            except Exception as e:
+                logger.warning("Không thể xóa collection ChromaDB: %s", e)
+            try:
                 self._collection = self._client.get_or_create_collection(
                     name=self.collection_name,
                     metadata={"hnsw:space": "cosine"},
                 )
             except Exception as e:
-                logger.warning("Không thể reset ChromaDB: %s", e)
+                logger.warning("Không thể tạo lại collection ChromaDB: %s", e)
         self._in_memory_docs.clear()
+
+
+# ============================================================================
+# Global Singleton Vector Store Manager
+# ============================================================================
+_default_vstore_manager: Optional[ChromaVectorStoreManager] = None
+
+
+def get_vector_store_manager() -> ChromaVectorStoreManager:
+    """Trả về Singleton instance của ChromaVectorStoreManager cho toàn bộ ứng dụng."""
+    global _default_vstore_manager
+    if _default_vstore_manager is None:
+        _default_vstore_manager = ChromaVectorStoreManager()
+    return _default_vstore_manager

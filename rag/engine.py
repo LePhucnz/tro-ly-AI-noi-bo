@@ -1,3 +1,4 @@
+
 """
 rag/engine.py
 RAG Engine hoàn chỉnh thực thi BaseRAGCore theo mô hình Clean Architecture.
@@ -16,7 +17,7 @@ from core.exceptions import LLMGenerationError
 from documents.loader_factory import Document
 from rag.prompts import AntiHallucinationPrompt
 from rag.retriever import AdvancedRetriever
-from rag.vector_store import ChromaVectorStoreManager
+from rag.vector_store import ChromaVectorStoreManager, get_vector_store_manager
 try:
     from services.memory import ChatMessage
     from services.output_parser import RAGOutputParser, RAGParsedOutput, SourceCitation
@@ -60,7 +61,7 @@ except ImportError:
                 source = meta.get("file_name") or meta.get("source") or "Tài liệu nội bộ"
                 page = meta.get("page")
                 score = meta.get("score")
-                snippet = getattr(doc, "page_content", str(doc))[:300]
+                snippet = getattr(doc, "page_content", str(doc)).strip()
                 citations.append(SourceCitation(source=source, page=page, score=score, snippet=snippet))
             return citations
 
@@ -79,6 +80,8 @@ except ImportError:
         similarity = "similarity"
         mmr = "mmr"
         threshold = "threshold"
+        similarity_score_threshold = "similarity_score_threshold"
+        hybrid = "hybrid"
 
 logger = logging.getLogger("rag_engine")
 
@@ -95,7 +98,7 @@ class CleanRAGCore(BaseRAGCore):
         retriever: Optional[AdvancedRetriever] = None,
         vector_store_manager: Optional[ChromaVectorStoreManager] = None,
     ) -> None:
-        self.vector_store_manager = vector_store_manager or ChromaVectorStoreManager()
+        self.vector_store_manager = vector_store_manager or get_vector_store_manager()
         self.retriever = retriever or AdvancedRetriever(self.vector_store_manager)
         self.settings = get_settings()
 
@@ -147,11 +150,12 @@ class CleanRAGCore(BaseRAGCore):
         citations: List[SourceCitation],
     ) -> AsyncIterator[str]:
         """
-        Sinh câu trả lời từng token (streaming) áp dụng Anti-Hallucination Guardrails.
-        - Nếu không có trích dẫn hoặc thông tin không đủ: Từ chối lịch sự và dứt khoát.
-        - Nếu có trích dẫn: Trả lời chính xác dựa trên ngữ cảnh kèm nguồn minh bạch.
+        Sinh câu trả lời từng token (streaming) qua LLM thực tế.
+        - Nếu không có trích dẫn: Từ chối lịch sự và dứt khoát.
+        - Nếu có trích dẫn: Gửi context + câu hỏi đến LLM, stream phản hồi.
+        - Fallback về mock nếu LLM không khả dụng.
         """
-        # 1. Kiểm tra Anti-Hallucination: Từ chối lịch sự nếu không có tài liệu nào vượt qua ngưỡng lọc
+        # 1. Kiểm tra Anti-Hallucination: Từ chối lịch sự nếu không có tài liệu nào
         if not citations:
             refusal_message = (
                 "Xin lỗi, tôi đã kiểm tra kỹ toàn bộ cơ sở dữ liệu tài liệu nội bộ "
@@ -164,31 +168,82 @@ class CleanRAGCore(BaseRAGCore):
                 await asyncio.sleep(0.02)
             return
 
-        # 2. Xây dựng câu trả lời dựa trên thông tin trích xuất thực tế
-        # Trích dẫn nguồn
-        top_citations = citations[:3]
-        unique_sources = list({f"'{c.source}'" for c in top_citations})
-        sources_str = ", ".join(unique_sources)
+        # 2. Xây dựng messages cho LLM từ Anti-Hallucination Prompt
+        # Chuyển SourceCitation sang dạng Document-like để format_context xử lý
+        citation_dicts = [
+            {
+                "source": c.source,
+                "page": c.page,
+                "snippet": c.snippet,
+            }
+            for c in citations
+        ]
 
-        # Tóm lược nội dung chính từ các đoạn trích
-        combined_snippets = "\n".join(
-            f"- [Nguồn: {c.source}, Trang {c.page or 1}]: {c.snippet.strip()}"
-            for c in top_citations
+        # Chuyển chat_history sang dạng dict
+        history_dicts = []
+        for msg in history:
+            if msg.content:
+                history_dicts.append({"role": msg.role, "content": msg.content})
+
+        messages = AntiHallucinationPrompt.build_prompt_messages(
+            question=query,
+            documents=citation_dicts,
+            chat_history=history_dicts[-6:],  # Giới hạn 3 cặp hội thoại gần nhất
         )
 
-        has_prior_history = len([m for m in history if m.role == "user"]) > 1
-        history_prefix = "Tiếp nối trao đổi trước đó, " if has_prior_history else ""
+        # 3. Gọi LLM thực tế (OpenAI-compatible API)
+        settings = self.settings
+        api_key = settings.OPENAI_API_KEY
+        base_url = getattr(settings, "OPENAI_BASE_URL", None)
+        llm_provider = settings.LLM_PROVIDER
+
+        if api_key and llm_provider != "mock":
+            try:
+                from openai import AsyncOpenAI
+
+                client_kwargs = {"api_key": api_key}
+                if base_url:
+                    client_kwargs["base_url"] = base_url
+
+                client = AsyncOpenAI(**client_kwargs)
+
+                stream = await client.chat.completions.create(
+                    model=settings.LLM_MODEL_NAME,
+                    messages=messages,
+                    temperature=settings.LLM_TEMPERATURE,
+                    max_tokens=1024,
+                    stream=True,
+                )
+
+                async for chunk in stream:
+                    delta = chunk.choices[0].delta if chunk.choices else None
+                    if delta and delta.content:
+                        yield delta.content
+
+                return  # Thành công, không cần fallback
+
+            except Exception as e:
+                logger.warning(
+                    "LLM streaming thất bại (%s), fallback về mock response: %s",
+                    llm_provider,
+                    str(e)[:200],
+                )
+
+        # 4. Fallback: Mock response (khi không có API key hoặc LLM lỗi)
+        from pathlib import Path
+        top_citations = citations[:3]
+        clean_sources = list({Path(c.source).name for c in top_citations})
+        sources_str = ", ".join(f"'{name}'" for name in clean_sources)
+
+        main_content = top_citations[0].snippet.strip()
 
         full_answer = (
-            f"{history_prefix}Dựa trên tài liệu nội bộ ({sources_str}), "
+            f"Dựa trên tài liệu nội bộ ({sources_str}), "
             f"câu trả lời cho câu hỏi '{query}' của bạn như sau:\n\n"
-            f"{top_citations[0].snippet.strip()}\n\n"
-            f"📌 **Căn cứ tài liệu tham khảo**:\n"
-            f"{combined_snippets}\n\n"
-            f"Nếu cần thêm thông tin chi tiết, bạn có thể tham khảo mục tài liệu trích dẫn đính kèm."
+            f"{main_content}\n\n"
+            f"*(Chi tiết căn cứ và số trang được trích xuất ở mục tài liệu tham khảo bên dưới)*"
         )
 
-        # 3. Phát token mượt mà giả lập LLM stream
         words = full_answer.split(" ")
         for idx, word in enumerate(words):
             yield word + (" " if idx < len(words) - 1 else "")

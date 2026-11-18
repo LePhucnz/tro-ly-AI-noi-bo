@@ -57,7 +57,7 @@ class RAGOutputParser:
                 source = meta.get("source") or meta.get("file_name") or meta.get("title") or "Tài liệu nội bộ"
                 page = meta.get("page") or meta.get("section")
                 score = meta.get("score") or meta.get("similarity")
-                snippet = doc.page_content[:300] if doc.page_content else ""
+                snippet = doc.page_content.strip() if doc.page_content else ""
                 url = meta.get("url")
             elif isinstance(doc, dict):
                 # Dict format
@@ -65,7 +65,7 @@ class RAGOutputParser:
                 page = doc.get("page") or doc.get("section")
                 score = doc.get("score") or doc.get("similarity")
                 snippet = doc.get("snippet") or doc.get("content") or doc.get("page_content") or ""
-                snippet = snippet[:300] if isinstance(snippet, str) else str(snippet)
+                snippet = str(snippet).strip()
                 url = doc.get("url")
             elif isinstance(doc, SourceCitation):
                 citations.append(doc)

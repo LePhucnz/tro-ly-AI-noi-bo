@@ -64,13 +64,7 @@ class RAGCoordinator:
                 threshold=threshold,
             )
 
-            # 3. Phát sự kiện Citations để frontend nhận danh sách nguồn trước hoặc song song
-            yield {
-                "event": "citations",
-                "data": json.dumps(RAGOutputParser.format_citations_event(citations), ensure_ascii=False),
-            }
-
-            # 4. Stream từng token trả lời từ LLM
+            # 3. Stream toàn bộ từng token của câu trả lời trước
             full_answer_parts: list[str] = []
             token_count = 0
 
@@ -85,6 +79,12 @@ class RAGCoordinator:
                     "event": "token",
                     "data": json.dumps(RAGOutputParser.format_token_event(token), ensure_ascii=False),
                 }
+
+            # 4. Khi câu trả lời đã phát xong toàn bộ, mới phát sự kiện trích xuất tài liệu tham khảo (Citations)
+            yield {
+                "event": "citations",
+                "data": json.dumps(RAGOutputParser.format_citations_event(citations), ensure_ascii=False),
+            }
 
             # 5. Lưu câu trả lời hoàn chỉnh cùng citations vào MemoryManager
             complete_answer = "".join(full_answer_parts)

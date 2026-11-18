@@ -20,6 +20,8 @@ class RetrieverStrategy(str, Enum):
     similarity = "similarity"  # Độ tương đồng Cosine chuẩn
     mmr = "mmr"                # Maximal Marginal Relevance (đa dạng hóa nguồn tin)
     threshold = "threshold"    # Lọc điểm tương đồng theo ngưỡng tối thiểu
+    similarity_score_threshold = "similarity_score_threshold"  # Alias tương thích đầy đủ
+    hybrid = "hybrid"          # Kết hợp Dense Vector + BM25 Từ khóa (khử dấu)
 
 
 class BaseRAGCore(ABC):

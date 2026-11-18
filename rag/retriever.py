@@ -1,3 +1,4 @@
+
 """
 rag/retriever.py
 Advanced Retriever hỗ trợ linh hoạt 3 chiến lược tìm kiếm tài liệu:
@@ -10,7 +11,14 @@ from __future__ import annotations
 
 import logging
 import math
+import re
+import unicodedata
 from typing import Any, Dict, List, Optional, Tuple, Union
+
+try:
+    from rank_bm25 import BM25Okapi
+except ImportError:
+    BM25Okapi = None  # type: ignore
 
 from core.config import get_settings
 from core.exceptions import InvalidRetrieverStrategyError
@@ -18,6 +26,19 @@ from documents.loader_factory import Document
 from rag.vector_store import ChromaVectorStoreManager
 
 logger = logging.getLogger("advanced_retriever")
+
+
+def _remove_accents(input_str: str) -> str:
+    """Loại bỏ dấu tiếng Việt để đối chiếu không dấu."""
+    nfkd = unicodedata.normalize("NFKD", input_str)
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).lower()
+
+
+def _tokenize_text(text: str) -> List[str]:
+    """Tokenize văn bản, bổ sung cả từ gốc và từ không dấu phục vụ BM25."""
+    clean = re.sub(r"[^\w\s]", " ", text.lower())
+    unaccent = _remove_accents(clean)
+    return clean.split() + unaccent.split()
 
 
 def _cosine_similarity(v1: Any, v2: Any) -> float:
@@ -102,11 +123,13 @@ class AdvancedRetriever:
     - 'similarity_score_threshold': Lọc chặt chẽ theo ngưỡng tối thiểu.
     """
 
-    SUPPORTED_STRATEGIES = ["similarity", "mmr", "similarity_score_threshold"]
+    SUPPORTED_STRATEGIES = ["similarity", "mmr", "similarity_score_threshold", "hybrid"]
     STRATEGY_ALIASES = {
         "threshold": "similarity_score_threshold",
         "score_threshold": "similarity_score_threshold",
         "similarity_threshold": "similarity_score_threshold",
+        "bm25": "hybrid",
+        "keyword": "hybrid",
     }
 
     def __init__(
@@ -166,15 +189,20 @@ class AdvancedRetriever:
         # 1. Tạo query embedding
         query_embedding = self._embed_query(query)
 
-        # 2. Lấy dữ liệu ứng viên từ ChromaDB hoặc In-Memory
-        candidate_docs, candidate_embeddings = self._get_candidates(query_embedding, fetch_limit=max(f_k, top_k * 3))
+        # 2. Lấy dữ liệu ứng viên từ ChromaDB hoặc In-Memory (kết hợp Dense + BM25 Keyword)
+        candidate_docs, candidate_embeddings = self._get_candidates(
+            query=query,
+            query_embedding=query_embedding,
+            fetch_limit=max(f_k, top_k * 4),
+            strategy=clean_strategy,
+        )
 
         if not candidate_docs:
             logger.info("Vector Store chưa có dữ liệu nào cho truy vấn: '%s'", query)
             return []
 
         # 3. Áp dụng chiến lược tìm kiếm
-        if clean_strategy == "similarity":
+        if clean_strategy in ("similarity", "hybrid"):
             # Sắp xếp theo score giảm dần và lấy top_k
             ranked = sorted(candidate_docs, key=lambda d: d.metadata.get("score", 0.0), reverse=True)
             return ranked[:top_k]
@@ -210,8 +238,10 @@ class AdvancedRetriever:
 
     def _get_candidates(
         self,
+        query: str,
         query_embedding: List[float],
         fetch_limit: int,
+        strategy: str = "similarity",
     ) -> Tuple[List[Document], List[List[float]]]:
         """Trích xuất tài liệu ứng viên và embedding tương ứng từ Vector Store."""
         docs: List[Document] = []
@@ -219,7 +249,9 @@ class AdvancedRetriever:
 
         if self.vector_store_manager.is_native_chroma:
             try:
-                collection = self.vector_store_manager._collection
+                collection = self.vector_store_manager.get_collection()
+                if collection is None:
+                    return [], []
                 total_in_db = collection.count()
                 if total_in_db == 0:
                     return [], []
@@ -240,12 +272,16 @@ class AdvancedRetriever:
                 embs_list = results.get("embeddings")
                 retrieved_embs = embs_list[0] if embs_list is not None and len(embs_list) > 0 else None
 
+                doc_id_set = set()
                 for i, text in enumerate(retrieved_texts):
                     meta = dict(retrieved_metas[i] if i < len(retrieved_metas) else {})
                     dist = float(retrieved_dists[i]) if i < len(retrieved_dists) else 0.5
                     # Cosine Distance -> Cosine Similarity: 1.0 - distance
                     score = max(0.0, min(1.0, 1.0 - dist))
                     meta["score"] = round(score, 4)
+
+                    chunk_id = meta.get("chunk_id", f"chk_{i}")
+                    doc_id_set.add(chunk_id)
 
                     doc = Document(page_content=text, metadata=meta)
                     docs.append(doc)
@@ -260,6 +296,91 @@ class AdvancedRetriever:
                         if isinstance(gen_emb, list) and len(gen_emb) > 0 and isinstance(gen_emb[0], (list, tuple)):
                             gen_emb = gen_emb[0]
                         embeddings.append(list(gen_emb))
+
+                # --- BM25 Keyword Search & Article Number Boosting ---
+                if BM25Okapi is not None and query.strip():
+                    try:
+                        all_data = collection.get(include=["documents", "metadatas", "embeddings"])
+                        all_docs_raw = all_data.get("documents") or []
+                        all_metas_raw = all_data.get("metadatas") or []
+                        all_embs_raw = all_data.get("embeddings")
+
+                        if all_docs_raw:
+                            tokenized_corpus = [_tokenize_text(d) for d in all_docs_raw]
+                            bm25 = BM25Okapi(tokenized_corpus)
+                            query_tokens = _tokenize_text(query)
+                            bm25_scores = bm25.get_scores(query_tokens)
+                            max_bm25 = float(max(bm25_scores)) if len(bm25_scores) > 0 and max(bm25_scores) > 0 else 1.0
+
+                            # 1. Kiểm tra truy vấn có chứa số hiệu Điều/Khoản cụ thể (ví dụ: 'điều 26', 'dieu 26')
+                            article_match = re.search(r"(?:điều|dieu|khoản|khoan|mục|muc)\s*(\d+)", query, re.IGNORECASE)
+                            target_num = article_match.group(1) if article_match else None
+                            article_pattern = re.compile(rf"(?:Điều|Khoản|Mục)\s+{target_num}\b", re.IGNORECASE) if target_num else None
+                            next_article_pattern = re.compile(r"(?:Điều|Điêu)\s+\d+\b", re.IGNORECASE)
+
+                            # Thu thập các chunk thuộc về cùng Điều khoản (Neighbor Chunk Expansion)
+                            article_chunk_indices = set()
+                            if target_num and article_pattern:
+                                for j, raw_text in enumerate(all_docs_raw):
+                                    if article_pattern.search(raw_text):
+                                        article_chunk_indices.add(j)
+                                        # Nối tiếp các chunk lân cận cùng thuộc Điều khoản đó (tối đa 4 chunk)
+                                        for offset in range(1, 5):
+                                            nxt = j + offset
+                                            if nxt < len(all_docs_raw):
+                                                nxt_text = all_docs_raw[nxt]
+                                                # Dừng lại nếu gặp Điều luật tiếp theo (ví dụ: Điêu 27)
+                                                nxt_match = next_article_pattern.search(nxt_text)
+                                                if nxt_match and not article_pattern.search(nxt_text):
+                                                    break
+                                                article_chunk_indices.add(nxt)
+
+                            # Tìm các chunk chứa đích danh điều khoản hoặc có điểm BM25 cao
+                            for j, raw_text in enumerate(all_docs_raw):
+                                j_meta = dict(all_metas_raw[j] if j < len(all_metas_raw) else {})
+                                j_cid = j_meta.get("chunk_id", f"all_chk_{j}")
+                                is_article_match = j in article_chunk_indices
+
+                                norm_bm25 = float(bm25_scores[j]) / max_bm25 if max_bm25 > 0 else 0.0
+
+                                # Nếu thuộc Điều luật được tìm kiếm -> gán điểm ưu tiên cực đại (0.95)
+                                if is_article_match:
+                                    boosted_score = 0.95
+                                    j_meta["score"] = round(boosted_score, 4)
+
+                                    if j_cid in doc_id_set:
+                                        # Cập nhật score của chunk đã có trong docs
+                                        for d in docs:
+                                            if d.metadata.get("chunk_id") == j_cid:
+                                                d.metadata["score"] = round(boosted_score, 4)
+                                    else:
+                                        # Bổ sung chunk này vào danh sách
+                                        docs.append(Document(page_content=raw_text, metadata=j_meta))
+                                        doc_id_set.add(j_cid)
+                                        if all_embs_raw is not None and j < len(all_embs_raw):
+                                            embeddings.append(list(all_embs_raw[j]))
+                                        else:
+                                            embeddings.append(list(self.vector_store_manager.embedding_function(raw_text)))
+
+                                # Nếu là chiến lược hybrid, kết hợp điểm dense + điểm BM25
+                                elif strategy == "hybrid":
+                                    if j_cid in doc_id_set:
+                                        for d in docs:
+                                            if d.metadata.get("chunk_id") == j_cid:
+                                                dense_sc = d.metadata.get("score", 0.5)
+                                                d.metadata["score"] = round(0.55 * dense_sc + 0.45 * norm_bm25, 4)
+                                    elif norm_bm25 >= 0.70:
+                                        # Thêm top kết quả BM25 xuất sắc nếu vector search bỏ sót
+                                        j_meta["score"] = round(0.45 * norm_bm25, 4)
+                                        docs.append(Document(page_content=raw_text, metadata=j_meta))
+                                        doc_id_set.add(j_cid)
+                                        if all_embs_raw is not None and j < len(all_embs_raw):
+                                            embeddings.append(list(all_embs_raw[j]))
+                                        else:
+                                            embeddings.append(list(self.vector_store_manager.embedding_function(raw_text)))
+
+                    except Exception as bm_err:
+                        logger.warning("BM25 / Keyword boosting error: %s", bm_err)
 
                 return docs, embeddings
 

@@ -69,7 +69,7 @@ class Settings(_SETTINGS_BASE):
         description="Nhà cung cấp embedding: 'huggingface', 'openai', hoặc 'local'",
     )
     EMBEDDING_MODEL_NAME: str = Field(
-        default="sentence-transformers/all-MiniLM-L6-v2",
+        default="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         description="Tên mô hình embedding tạo vector biểu diễn tài liệu",
     )
     EMBEDDING_DEVICE: str = Field(
@@ -128,7 +128,11 @@ class Settings(_SETTINGS_BASE):
     )
     OPENAI_API_KEY: Optional[str] = Field(
         default=None,
-        description="Khóa API OpenAI (nếu sử dụng OpenAI LLM/Embeddings)",
+        description="Khóa API OpenAI hoặc OpenRouter (nếu sử dụng LLM thực tế)",
+    )
+    OPENAI_BASE_URL: Optional[str] = Field(
+        default=None,
+        description="Base URL cho OpenAI-compatible API (ví dụ: OpenRouter, Azure, v.v.)",
     )
     GOOGLE_API_KEY: Optional[str] = Field(
         default=None,

@@ -1,6 +1,6 @@
 # 🤖 Trợ lý AI Nội bộ (Internal Enterprise RAG Assistant)
 
-Hệ thống Trợ lý Trí tuệ Nhân tạo tra cứu tài liệu nội bộ doanh nghiệp theo mô hình **Clean Architecture**, tích hợp **RAG (Retrieval-Augmented Generation)**, **ChromaDB Persistent Storage**, **Document Ingestion Pipeline** chống trùng lặp, quản lý bộ nhớ hội thoại (`session_id`), truyền phát câu trả lời thời gian thực qua **Server-Sent Events (SSE)** và giao diện tương tác **Streamlit**.
+Hệ thống Trợ lý Trí tuệ Nhân tạo tra cứu tài liệu nội bộ doanh nghiệp theo mô hình **Clean Architecture**, tích hợp **RAG (Retrieval-Augmented Generation)**, **ChromaDB Persistent Storage**, **Multilingual Embedding (Tiếng Việt)**, **Hybrid Search (BM25 + Dense Vector)**, **Neighbor Chunk Expansion (Mở rộng ngữ cảnh liên hoàn theo Điều luật)**, **Document Ingestion Pipeline** chống trùng lặp, quản lý bộ nhớ hội thoại (`session_id`), truyền phát câu trả lời thời gian thực qua **Server-Sent Events (SSE)** và giao diện tương tác **Streamlit phong cách Google Gemini**.
 
 ---
 
@@ -34,24 +34,30 @@ Hệ thống Trợ lý Trí tuệ Nhân tạo tra cứu tài liệu nội bộ d
 |  +-----------------------------------------+  |   |  +-------------------------------------+  |
 |  | CleanRAGCore (implements BaseRAGCore)   |  |   |  | Loader Factory (.pdf/.docx/.txt/    |  |
 |  | - stream_answer() / generate_answer()   |  |   |  |                .csv/.md)            |  |
-|  +--------------------+--------------------+  |   |  +------------------+------------------+  |
-|                       |                       |   |                     |                     |
-|  +--------------------+--------------------+  |   |  +------------------v------------------+  |
-|  | AntiHallucinationPrompt                 |  |   |  | RecursiveCharacterTextSplitter      |  |
-|  | - Groundedness, Refusal, Citations      |  |   |  | (chunk_size=1000, overlap=200)      |  |
-|  +--------------------+--------------------+  |   |  +------------------+------------------+  |
-|                       |                       |   |                     |                     |
-|  +--------------------+--------------------+  |   |  +------------------v------------------+  |
-|  | AdvancedRetriever                       |  |   |  | DocumentHasher (SHA-256)            |  |
-|  | - 1. similarity                        |  |   |  | - File & Deterministic Chunk IDs    |  |
-|  | - 2. mmr (Maximal Marginal Relevance)  |  |   |  | - Deduplication Registry            |  |
-|  | - 3. similarity_score_threshold         |  |   |  +------------------+------------------+  |
-|  +--------------------+--------------------+  |   +---------------------|---------------------+
-|                       |                                                 |
+|  | - Kết nối LLM thực tế (Gemini/OpenAI)  |  |   |  +------------------+------------------+  |
+|  +--------------------+--------------------+  |   |                     |                     |
+|                       |                       |   |  +------------------v------------------+  |
+|  +--------------------+--------------------+  |   |  | TextCleaner                         |  |
+|  | AntiHallucinationPrompt                 |  |   |  | - Loại bỏ Header/Footer trang       |  |
+|  | - Groundedness, Refusal, Citations      |  |   |  | - Chuẩn hóa khoảng trắng & ký tự thừa|  |
+|  | - Professional Synthesis Formatting     |  |   |  +------------------+------------------+  |
+|  +--------------------+--------------------+  |   |                     |                     |
+|                       |                       |   |  +------------------v------------------+  |
+|  +--------------------+--------------------+  |   |  | RecursiveCharacterTextSplitter      |  |
+|  | AdvancedRetriever (4 Chiến lược)        |  |   |  | (chunk_size=1000, overlap=200)      |  |
+|  | - 1. similarity (Cosine Vector)         |  |   |  +------------------+------------------+  |
+|  | - 2. hybrid (Dense Vector + BM25)       |  |   |                     |                     |
+|  | - 3. mmr (Maximal Marginal Relevance)   |  |   |  +------------------v------------------+  |
+|  | - 4. similarity_score_threshold         |  |   |  | DocumentHasher (SHA-256)            |  |
+|  | - Article Boosting & Neighbor Stitching |  |   |  | - File & Deterministic Chunk IDs    |  |
+|  +--------------------+--------------------+  |   |  | - Deduplication Registry            |  |
+|                       |                       |   |  +------------------+------------------+  |
+|                       |                       |   +---------------------|---------------------+
 |                       v                                                 v
 |  +---------------------------------------------------------------------------------+          |
 |  | ChromaVectorStoreManager (ChromaDB Persistent Client tại ./data/chroma_db)      |          |
-|  | - Embeddings: Sentence-Transformers (all-MiniLM-L6-v2)                          |          |
+|  | - Embeddings: Multilingual Sentence-Transformers (Tiếng Việt)                   |          |
+|  |   (paraphrase-multilingual-MiniLM-L12-v2)                                       |          |
 |  | - Idempotent Upsert & Deduplication: Ngăn chặn 100% nạp lặp dữ liệu vector     |          |
 |  +---------------------------------------------------------------------------------+          |
 +-----------------------------------------------------------------------------------------------+
@@ -71,15 +77,16 @@ Hệ thống Trợ lý Trí tuệ Nhân tạo tra cứu tài liệu nội bộ d
 │   ├── __init__.py
 │   ├── hasher.py                        # Băm SHA-256 tệp/chunk, sinh deterministic ID & chống trùng lặp
 │   ├── loader_factory.py                # Factory tự động đọc các định dạng: .pdf, .docx, .txt, .csv, .md
+│   ├── text_cleaner.py                  # Loại bỏ header/footer lặp trang PDF, chuẩn hóa khoảng trắng
 │   ├── splitter.py                      # RecursiveCharacterTextSplitter (chunk_size=1000, overlap=200)
-│   └── ingestion.py                     # DocumentIngestionPipeline trọn vẹn (load -> hash -> split -> deduplicate)
+│   └── ingestion.py                     # DocumentIngestionPipeline (clean -> hash -> split -> deduplicate)
 │
 ├── rag/                                 # Vector Store, Retriever & RAG Engine
 │   ├── __init__.py
-│   ├── vector_store.py                  # ChromaDB Persistent Storage Client & Embedding Manager
-│   ├── retriever.py                     # Advanced Retriever (similarity, mmr, similarity_score_threshold)
-│   ├── prompts.py                       # Anti-Hallucination Prompt Template & Quy chuẩn trích dẫn
-│   └── engine.py                        # CleanRAGCore thực thi BaseRAGCore (Streaming SSE & Sync)
+│   ├── vector_store.py                  # ChromaDB Persistent Storage & Multilingual Embedding Manager
+│   ├── retriever.py                     # Advanced Retriever (similarity, hybrid, mmr, threshold)
+│   ├── prompts.py                       # Anti-Hallucination Prompt & Professional Synthesis Formatting
+│   └── engine.py                        # CleanRAGCore thực thi BaseRAGCore (LLM Streaming SSE & Sync)
 │
 ├── api/                                 # Tầng giao tiếp HTTP & Server-Sent Events
 │   ├── __init__.py
@@ -101,7 +108,7 @@ Hệ thống Trợ lý Trí tuệ Nhân tạo tra cứu tài liệu nội bộ d
 │   ├── test_memory.py                   # Kiểm thử quản lý bộ nhớ phiên & sliding window
 │   └── test_output_parser.py            # Kiểm thử trích xuất citations và định dạng SSE
 │
-├── app.py                               # Giao diện người dùng Streamlit trực quan
+├── app.py                               # Giao diện người dùng Streamlit phong cách Google Gemini
 ├── server.py                            # Khởi tạo FastAPI App, CORS, Lifespan & Routers
 ├── main.py                              # Điểm khởi chạy FastAPI Backend
 ├── .env                                 # Biến môi trường đang kích hoạt cục bộ
@@ -113,34 +120,47 @@ Hệ thống Trợ lý Trí tuệ Nhân tạo tra cứu tài liệu nội bộ d
 
 ---
 
-## 🌟 Các Tính năng Cốt lõi
+## 🌟 Các Tính năng Cốt lõi & Kỹ thuật Chuyên sâu
 
-### 1. Ingestion Pipeline & Chống trùng lặp (SHA-256)
+### 1. Ingestion Pipeline & Tiền xử lý Làm sạch Văn bản
 - **Loader Factory**: Tự động nhận diện định dạng tệp và bóc tách dữ liệu sạch từ `.pdf`, `.docx`, `.txt`, `.csv`, `.md`.
+- **TextCleaner**: 
+  - Tự động nhận diện và loại bỏ các dòng header/footer lặp trang (ví dụ: *"Bảo Minh: Quy chế nội bộ ... Trang 18/42"* hay *"Page 18 of 42"*).
+  - Chuẩn hóa khoảng trắng, gộp các dòng trống thừa để tránh làm gãy vụn câu văn khi chuyển trang.
 - **Recursive Text Splitter**: Phân mảnh văn bản tối ưu ngữ cảnh (`chunk_size=1000`, `chunk_overlap=200`).
-- **Chống nạp trùng lặp tuyệt đối**:
+- **Chống nạp trùng lặp tuyệt đối (SHA-256)**:
   - Tính mã băm SHA-256 nhị phân của tệp gốc.
   - Sinh **Chunk ID tiền định (Deterministic ID)**: `chk_sha256(file_hash + chunk_index + chunk_content_hash)`.
   - Kiểm tra đối chiếu trước khi nạp vào Vector Store. Nếu tệp hoặc đoạn đã tồn tại, hệ thống tự động bỏ qua (idempotent), không gây phình to database.
 
-### 2. ChromaDB Persistent Storage & Advanced Retriever
-- **Lưu trữ Cục bộ (Local Persistence)**: Lưu trữ toàn bộ vector index và metadata vào thư mục `./data/chroma_db`, sẵn sàng phục vụ mà không phụ thuộc cloud database ngoài.
-- **Local Embeddings**: Tích hợp mô hình `sentence-transformers/all-MiniLM-L6-v2` chạy cục bộ (CPU/GPU), có cơ chế dự phòng `DeterministicHashEmbeddings` offline.
-- **3 Chiến lược Tìm kiếm Linh hoạt**:
-  1. `similarity`: Tìm kiếm Cosine Similarity chuẩn, lấy top $K$ tài liệu liên quan nhất.
-  2. `mmr` *(Maximal Marginal Relevance)*: Tối ưu độ đa dạng, loại bỏ các đoạn trích lặp ý và gom nhặt thông tin từ nhiều tài liệu khác nhau.
-  3. `similarity_score_threshold`: Lọc bỏ dứt khoát các đoạn trích có điểm tương đồng dưới ngưỡng quy định.
+### 2. Mô hình Embedding Đa ngữ (Tối ưu Tiếng Việt)
+- Sử dụng mô hình **`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`** (chạy cục bộ offline).
+- Khắc phục triệt để hạn chế của các mô hình tiếng Anh đơn ngữ: hiểu sâu sắc ngữ nghĩa tiếng Việt, phân biệt chính xác các thuật ngữ pháp lý doanh nghiệp (*"nhiệm kỳ"* tương đồng với *"thời gian công tác"*).
 
-### 3. Anti-Hallucination & Trích dẫn Nguồn Minh bạch (Source Citations)
-- **Groundedness**: Ép LLM chỉ trả lời dựa trên thông tin có trong ngữ cảnh tài liệu nội bộ được cung cấp.
-- **Honest Refusal**: Nếu không tìm thấy thông tin hoặc điểm tương đồng thấp, hệ thống từ chối lịch sự:
-  > *"Xin lỗi, tôi đã kiểm tra kỹ toàn bộ tài liệu nội bộ được cung cấp nhưng không tìm thấy thông tin phù hợp..."*
-- **Source Citations**: Mọi khẳng định đều đính kèm nguồn minh bạch: tên tệp (`source`), số trang (`page`), điểm tin cậy (`score`), và đoạn trích dẫn gốc (`snippet`).
+### 3. Tìm kiếm Kết hợp (Hybrid Search) & Mở rộng Ngữ cảnh Điều luật
+- **4 Chiến lược Tìm kiếm Linh hoạt**:
+  1. `similarity`: Tìm kiếm Cosine Similarity chuẩn.
+  2. `hybrid`: Kết hợp **Dense Vector + BM25 Okapi** (có chuẩn hóa khử dấu tiếng Việt), giải quyết bài toán tìm kiếm từ khóa viết tắt, gõ không dấu hoặc sai chính tả.
+  3. `mmr` *(Maximal Marginal Relevance)*: Tối ưu độ đa dạng, loại bỏ các đoạn trích lặp ý.
+  4. `similarity_score_threshold`: Lọc bỏ dứt khoát các đoạn trích có điểm tương đồng dưới ngưỡng quy định.
+- **Neighbor Chunk Expansion (Mở rộng ngữ cảnh liên hoàn theo Điều luật)**:
+  - Khi phát hiện câu hỏi tra cứu theo số hiệu điều khoản (ví dụ: *"Điều 26"*, *"noi dung dieu 26 trong cinh sach"*), hệ thống tự động truy xuất chunk mở đầu và **nối tiếp toàn bộ các chunk liền kề** thuộc về Điều khoản đó cho đến khi chạm tới Điều tiếp theo.
+  - Đảm bảo LLM nhận trọn vẹn 100% các Khoản, Điểm và quy định chi tiết, không bao giờ bị cắt cụt giữa chừng.
 
-### 4. Quản lý Bộ nhớ & Server-Sent Events (SSE)
+### 4. Tích hợp LLM Thực tế & Anti-Hallucination Guardrails
+- **LLM thực tế**: Hỗ trợ kết nối qua chuẩn OpenAI API (chạy các mô hình mạnh mẽ như `google/gemini-2.5-flash` hoặc `gpt-4o-mini` qua OpenRouter/OpenAI API).
+- **Anti-Hallucination Guardrails**:
+  - **Groundedness**: Ép LLM chỉ trả lời dựa trên thông tin có trong ngữ cảnh tài liệu nội bộ được cung cấp.
+  - **Honest Refusal**: Nếu ngữ cảnh không chứa thông tin, từ chối lịch sự và rõ ràng:
+    > *"Xin lỗi, tôi đã kiểm tra kỹ toàn bộ tài liệu nội bộ được cung cấp nhưng không tìm thấy thông tin phù hợp..."*
+  - **Source Citations**: Mọi khẳng định quan trọng đều được đính kèm nguồn minh bạch: tên tệp và số trang (`[Nguồn: <tên_file>, Trang: <số_trang>]`).
+- **Professional Synthesis Formatting**:
+  - LLM tổng hợp thông tin mạch lạc theo phong cách chuyên nghiệp, định dạng Markdown phân cấp (in đậm, danh sách gạch đầu dòng), không sao chép máy móc ký tự đầu dòng thô từ PDF.
+
+### 5. Quản lý Bộ nhớ & Server-Sent Events (SSE)
 - Quản lý phiên làm việc đa người dùng tách biệt qua `session_id`.
 - Bộ nhớ Sliding Window tự động cắt tỉa tin nhắn cũ để bảo toàn giới hạn context của LLM.
-- Truyền phát câu trả lời từng token thời gian thực dạng streaming mượt mà như ChatGPT.
+- **Trình tự phản hồi tối ưu UX**: Stream toàn bộ từng token của câu trả lời trước; chỉ khi câu trả lời hoàn tất mới phát thẻ trích dẫn nguồn (**Grounding Chips**) và Accordion xem chi tiết bên dưới.
 
 ---
 
@@ -176,7 +196,7 @@ uvicorn server:app --host 0.0.0.0 --port 8000
 
 ### 3. Khởi chạy Streamlit Frontend
 
-Mở một cửa sổ terminal mới:
+Mở một terminal mới:
 ```bash
 source .venv/bin/activate
 streamlit run app.py --server.port 8501
@@ -197,7 +217,7 @@ pytest -c pytest.ini tests_rag/ -v
 Hỗ trợ các định dạng `.pdf`, `.docx`, `.txt`, `.csv`, `.md`:
 ```bash
 curl -X POST "http://localhost:8000/api/v1/documents/upload" \
-  -F "file=@./docs_sample/Quy_che_WFH_2024.pdf"
+  -F "file=@./docs_sample/Quy_che_noi_bo_quan_tri.pdf"
 ```
 
 ### 2. Xem Thống kê Vector Store (`GET /api/v1/documents/stats`)
@@ -209,7 +229,7 @@ Phản hồi mẫu:
 {
   "collection_name": "internal_knowledge_base",
   "persist_directory": "/home/noissi/tro-ly-AI-noi-bo/data/chroma_db",
-  "total_chunks_count": 42,
+  "total_chunks_count": 146,
   "embedding_provider": "huggingface",
   "supported_file_types": [".pdf", ".docx", ".txt", ".csv", ".md"]
 }
@@ -221,10 +241,10 @@ curl -N -X POST "http://localhost:8000/api/v1/chat/stream" \
   -H "Content-Type: application/json" \
   -d '{
     "session_id": "user-session-01",
-    "query": "Quy định làm việc từ xa tối đa mấy ngày một tuần?",
-    "strategy": "mmr",
-    "k": 3,
-    "threshold": 0.5
+    "query": "Nhiệm kỳ của Tổng Giám đốc, Phó Tổng Giám đốc và Kế toán trưởng công ty là bao nhiêu năm?",
+    "strategy": "hybrid",
+    "k": 6,
+    "threshold": 0.35
   }'
 ```
 
@@ -234,9 +254,9 @@ curl -X POST "http://localhost:8000/api/v1/chat" \
   -H "Content-Type: application/json" \
   -d '{
     "session_id": "user-session-01",
-    "query": "Chính sách bảo mật mật khẩu công ty như thế nào?",
+    "query": "Theo quy chế, số lượng thành viên Hội đồng quản trị mặc định là bao nhiêu?",
     "strategy": "similarity",
-    "k": 4
+    "k": 6
   }'
 ```
 
@@ -247,7 +267,7 @@ curl -X POST "http://localhost:8000/api/v1/documents/reset"
 
 ---
 
-## ⚙️ Biến Môi trường (.env)
+## ⚙️ Bảng Biến Môi trường (.env)
 
 Tất cả các tham số có thể điều chỉnh linh hoạt trong tệp [.env](file:///home/noissi/tro-ly-AI-noi-bo/.env):
 
@@ -256,12 +276,15 @@ Tất cả các tham số có thể điều chỉnh linh hoạt trong tệp [.en
 | `CHROMA_PERSIST_DIR` | `./data/chroma_db` | Đường dẫn thư mục lưu trữ persistent của ChromaDB |
 | `CHROMA_COLLECTION_NAME` | `internal_knowledge_base` | Tên collection mặc định |
 | `EMBEDDING_PROVIDER` | `huggingface` | Nhà cung cấp embedding (`huggingface` hoặc `openai`) |
-| `EMBEDDING_MODEL_NAME` | `sentence-transformers/all-MiniLM-L6-v2` | Mô hình biểu diễn vector ngữ nghĩa |
+| `EMBEDDING_MODEL_NAME` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | Mô hình vector đa ngữ hỗ trợ tối ưu tiếng Việt |
 | `CHUNK_SIZE` | `1000` | Số ký tự tối đa của một chunk |
 | `CHUNK_OVERLAP` | `200` | Số ký tự gối đầu giữa 2 chunks liền kề |
-| `DEFAULT_RETRIEVER_STRATEGY` | `similarity` | Chiến lược mặc định (`similarity`, `mmr`, `similarity_score_threshold`) |
-| `DEFAULT_TOP_K` | `4` | Số lượng tài liệu trích xuất tối đa |
+| `DEFAULT_RETRIEVER_STRATEGY` | `similarity` | Chiến lược mặc định (`similarity`, `hybrid`, `mmr`, `similarity_score_threshold`) |
+| `DEFAULT_TOP_K` | `4` | Số lượng tài liệu trích xuất tối đa (trên UI mặc định là 6) |
 | `DEFAULT_SCORE_THRESHOLD` | `0.5` | Ngưỡng điểm tương đồng tối thiểu |
 | `MMR_LAMBDA_MULT` | `0.7` | Hệ số cân bằng giữa Relevance và Diversity của MMR |
-| `LLM_PROVIDER` | `mock` | Nhà cung cấp LLM (`mock`, `openai`, `gemini`) |
+| `LLM_PROVIDER` | `openai` | Nhà cung cấp LLM (`openai`, `gemini`, hoặc `mock`) |
+| `LLM_MODEL_NAME` | `google/gemini-2.5-flash` | Tên mô hình ngôn ngữ lớn sinh câu trả lời |
 | `LLM_TEMPERATURE` | `0.0` | Độ sáng tạo (0.0 chống ảo giác tối đa) |
+| `OPENAI_API_KEY` | *(Khóa API)* | API key truy cập mô hình ngôn ngữ lớn |
+| `OPENAI_BASE_URL` | `https://openrouter.ai/api/v1` | Endpoint API tương thích OpenAI |

@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 
 from api.routes import router as api_router
 from api.ingest_routes import router as ingest_router
+from api.cv_routes import router as cv_router
 from core.exceptions import setup_exception_handlers
 from rag.engine import CleanRAGCore
 from services.rag_core_interface import register_rag_core
@@ -65,6 +66,7 @@ app.add_middleware(
 # Đăng ký Routers
 app.include_router(api_router)
 app.include_router(ingest_router)
+app.include_router(cv_router)
 
 # Đăng ký Domain Exception Handlers
 setup_exception_handlers(app)

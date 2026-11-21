@@ -86,3 +86,28 @@ class HealthCheckResponse(BaseModel):
     active_sessions_count: int
     rag_core: str
 
+
+# ==============================================================================
+# Schemas cho CV Screening API
+# ==============================================================================
+
+from core.cv_schemas import CVScreeningResult, JobCriteria
+
+
+class ScreenTextRequest(BaseModel):
+    """Yêu cầu sàng lọc CV gửi trực tiếp dạng nội dung văn bản."""
+    cv_text: str = Field(..., min_length=10, description="Nội dung văn bản CV")
+    criteria: JobCriteria = Field(..., description="Bộ tiêu chí tuyển dụng vị trí tương ứng")
+    file_name: Optional[str] = Field(default="candidate_cv.txt", description="Tên tệp hiển thị trong báo cáo")
+
+
+class BatchCVScreeningResponse(BaseModel):
+    """Phản hồi sàng lọc danh sách nhiều CV cho cùng một vị trí tuyển dụng."""
+    job_title: str = Field(..., description="Vị trí công việc đang xét tuyển")
+    total_cvs: int = Field(..., description="Tổng số hồ sơ CV đã xử lý")
+    pass_count: int = Field(..., description="Số lượng ứng viên đạt ngưỡng xét tuyển")
+    fail_count: int = Field(..., description="Số lượng ứng viên chưa đạt")
+    average_score: float = Field(..., description="Điểm đánh giá trung bình của các ứng viên")
+    top_candidate: Optional[str] = Field(default=None, description="Tên ứng viên có điểm số cao nhất")
+    results: List[CVScreeningResult] = Field(default_factory=list, description="Danh sách kết quả đã sắp xếp theo điểm số giảm dần")
+

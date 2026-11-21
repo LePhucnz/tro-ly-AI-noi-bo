@@ -1,44 +1,72 @@
+# ==============================================================================
+# Git Ignore - Trợ lý AI Nội bộ & Sàng lọc CV Tuyển dụng
+# ==============================================================================
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
 
-# Virtual environments
+# Virtual Environments
 .venv/
 venv/
 ENV/
 env/
+ENV*/
 
-# Pytest / Coverage
+# Testing & Coverage
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+*.cover
+coverage.xml
+*.junit.xml
 
-# Logs & temp files
+# Logs & Temporary files
 *.log
 tmp/
 temp/
 *.tmp
+logs/
+temp_cv/
+uploads/
 
-# Streamlit config & telemetry
+# Streamlit Cache & Telemetry
 .streamlit/
+*.streamlit
 
-# IDE & OS files
+# IDEs & Code Editors
 .vscode/
 .idea/
-.DS_Store
+*.sublime-project
+*.sublime-workspace
 *.swp
 *.swo
+*~
 
-# Environment variables & Secrets
+# Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.directory
+
+# Environment Variables & Sensitive Credentials
 .env
 .env.local
 .env.*.local
+*.pem
+*.key
+*.cert
 
-# ChromaDB & Vector Storage data
+# Vector Store, Database & Local Storage
 data/
 chroma_db/
-
-# Uploaded / Cached files
+*.sqlite3
+*.db
 .user_uploaded/
-docs_src/

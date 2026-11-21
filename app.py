@@ -859,7 +859,9 @@ else:
                 col_c3.markdown(f"**Địa điểm:** `{c_info.get('location') or 'Không có'}`")
 
                 if c_info.get("links"):
-                    st.caption("🔗 Liên kết: " + " | ".join(f"[{l}]({l})" for l in c_info.get("links", [])))
+                    def _ensure_https(url: str) -> str:
+                        return url if url.startswith(("http://", "https://")) else "https://" + url
+                    st.caption("🔗 Liên kết: " + " | ".join(f"[{l}]({_ensure_https(l)})" for l in c_info.get("links", [])))
 
                 # Bản tóm tắt cho HR
                 st.markdown(

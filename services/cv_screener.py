@@ -105,12 +105,40 @@ class CVExtractor:
         email_match = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
         email = email_match.group(0) if email_match else None
 
-        # Phone (hỗ trợ định dạng số điện thoại Việt Nam & quốc tế)
-        phone_match = re.search(
-            r"(?:(?:\+?84|0)(?:\s*|\.?|-?)(?:3|5|7|8|9)\d(?:\s*|\.?|-?)\d{3}(?:\s*|\.?|-?)\d{3,4})|(?:\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})",
+        # Phone (hỗ trợ toàn diện định dạng SĐT Việt Nam: cố định Hà Nội/HCM 024/028, di động 03/05/07/08/09 & quốc tế +84)
+        phone = None
+        # Ưu tiên 1: Tìm theo nhãn tiền tố (Độ chính xác cao nhất)
+        prefix_phone_match = re.search(
+            r"(?:Điện\s*thoại|Đt|SĐT|SDT|Telephone|Phone|Tel|Mobile|Hotline)\s*[:：]?\s*([+0-9(][+0-9()\s.-]{7,22}[0-9])",
             text,
+            re.IGNORECASE,
         )
-        phone = phone_match.group(0).strip() if phone_match else None
+        if prefix_phone_match:
+            candidate_phone = prefix_phone_match.group(1).strip()
+            digits = re.sub(r"\D", "", candidate_phone)
+            if 8 <= len(digits) <= 15:
+                phone = candidate_phone
+
+        # Ưu tiên 2: Tìm theo mẫu số chuẩn nếu không có tiền tố
+        if not phone:
+            general_phone_patterns = [
+                # Cố định VN có ngoặc: (024) 6680 5588 hoặc (+84 24) 6680 5588
+                r"\((?:02\d{1,2}|\+84\s*2\d{1,2})\)[-.\s]?\d{3,4}[-.\s]?\d{4}\b",
+                # Có mã quốc gia: +84 hoặc (+84)
+                r"(?:\+84|\(\+84\))[-.\s]?(?:2\d{1,2}|3\d|5\d|7\d|8\d|9\d)[-.\s0-9]{6,12}\b",
+                # Di động / Cố định VN bắt đầu bằng 0: 02x, 03x, 05x, 07x, 08x, 09x
+                r"\b0(?:2\d{1,2}|3\d|5\d|7\d|8\d|9\d)[-.\s0-9]{7,11}\b",
+                # Chuẩn quốc tế: (xxx) xxx-xxxx
+                r"\(?\d{3,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{4}\b",
+            ]
+            for pat in general_phone_patterns:
+                m = re.search(pat, text)
+                if m:
+                    cand = m.group(0).strip()
+                    digits = re.sub(r"\D", "", cand)
+                    if 8 <= len(digits) <= 15:
+                        phone = cand
+                        break
 
         # Links (LinkedIn, GitHub, Portfolio)
         link_matches = re.findall(
@@ -118,7 +146,12 @@ class CVExtractor:
             text,
             re.IGNORECASE,
         )
-        links = list(dict.fromkeys(link_matches))
+        # Chuẩn hóa: đảm bảo mọi link đều có https:// prefix
+        links = []
+        for lnk in dict.fromkeys(link_matches):
+            if not lnk.startswith(("http://", "https://")):
+                lnk = "https://" + lnk
+            links.append(lnk)
 
         # Họ tên ứng viên
         full_name = cls._extract_candidate_name(text, email)
@@ -145,10 +178,21 @@ class CVExtractor:
 
     @classmethod
     def _extract_candidate_name(cls, text: str, email: Optional[str]) -> Optional[str]:
-        """Bóc tách tên ứng viên dựa trên vị trí đầu tài liệu hoặc tiền tố Họ tên."""
+        """Bóc tách tên ứng viên dựa trên vị trí đầu tài liệu, tiền tố hoặc so khớp email."""
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:
             return None
+
+        # Danh sách đen các đề mục thường gặp để tránh nhận diện nhầm tiêu đề thành tên
+        HEADER_BLACKLIST = {
+            "WORK EXPERIENCE", "EXPERIENCE", "EMPLOYMENT HISTORY", "CAREER HISTORY",
+            "EDUCATION", "ACADEMIC BACKGROUND", "HỌC VẤN", "TRÌNH ĐỘ HỌC VẤN",
+            "SKILLS", "TECHNICAL SKILLS", "ADDITIONAL SKILLS", "EXPERTISE", "KỸ NĂNG",
+            "PROJECTS", "KEY PROJECTS", "DỰ ÁN", "DỰ ÁN TIÊU BIỂU",
+            "SUMMARY", "PROFESSIONAL SUMMARY", "OBJECTIVE", "CAREER OBJECTIVE",
+            "TÓM TẮT", "MỤC TIÊU NGHỀ NGHIỆP", "PROFILE", "THÔNG TIN", "CONTACT", "LIÊN HỆ",
+            "CURRICULUM VITAE", "RESUME", "CV", "CERTIFICATIONS", "AWARDS",
+        }
 
         # Cách 1: Tiền tố rõ ràng: "Họ và tên: Nguyễn Văn A", "Full Name: John Doe"
         prefix_pattern = r"(?:Họ\s*(?:và|&)?\s*tên|Full\s*name|Name)\s*[:\-]\s*([A-ZÀ-Ỹa-zà-ỹ\s]+)"
@@ -159,18 +203,33 @@ class CVExtractor:
                 if 2 <= len(candidate_name.split()) <= 6:
                     return candidate_name
 
-        # Cách 2: Dòng đầu tiên hoặc thứ hai viết hoa toàn bộ hoặc dạng Tiêu đề
+        # Cách 2: Tìm kiếm tên dựa vào email trong các dòng đầu tài liệu
+        if email:
+            user_part = email.split("@")[0]
+            tokens = [p.lower() for p in re.split(r"[._-]", user_part) if len(p) >= 2 and p.isalpha()]
+            if len(tokens) >= 2:
+                for line in lines[:6]:
+                    clean_l = re.sub(r"https?://\S+|www\.\S+|\S+@\S+|\+?[0-9()\s.-]{7,22}|\S+\.(?:com|vn|org|io|dev|net)", " ", line)
+                    clean_l = re.sub(r"[^a-zA-ZÀ-Ỹà-ỹ\s]", " ", clean_l).strip()
+                    words = clean_l.split()
+                    matched_words = [w for w in words if w.lower() in tokens]
+                    if len(matched_words) >= 2:
+                        return " ".join(w.capitalize() for w in matched_words)
+
+        # Cách 3: Dòng đầu tiên hoặc thứ hai viết hoa toàn bộ hoặc dạng Tiêu đề (không chứa trong blacklist)
         for line in lines[:4]:
             if line.startswith(("#", "-", "*", "http", "www", "@")) or "@" in line:
                 continue
-            # Bỏ qua nếu dòng chứa các từ khóa tiêu đề chung
-            if any(k in line.upper() for k in ["CURRICULUM VITAE", "RESUME", "CV", "THÔNG TIN", "PROFILE"]):
+            # Làm sạch URL, email, SĐT trước khi kiểm tra
+            clean_l = re.sub(r"https?://\S+|www\.\S+|\S+@\S+|\+?[0-9()\s.-]{7,22}|\S+\.(?:com|vn|org|io|dev|net)", " ", line)
+            clean_l = re.sub(r"[^a-zA-ZÀ-Ỹà-ỹ\s]", " ", clean_l).strip()
+            if clean_l.upper() in HEADER_BLACKLIST:
                 continue
-            words = line.split()
+            words = clean_l.split()
             if 2 <= len(words) <= 5 and all(w[0].isupper() for w in words if w):
-                return line
+                return clean_l
 
-        # Cách 3: Lấy từ email nếu không tìm thấy dòng phù hợp
+        # Cách 4: Fallback suy luận từ địa chỉ email
         if email:
             user_part = email.split("@")[0]
             name_parts = re.split(r"[._-]", user_part)
@@ -212,44 +271,127 @@ class CVExtractor:
 
     @classmethod
     def _extract_work_experience(cls, text: str) -> Tuple[List[CandidateWorkExperience], Optional[float]]:
-        """Bóc tách các vị trí công tác và ước tính tổng số năm kinh nghiệm."""
+        """
+        Bóc tách các vị trí công tác và ước tính tổng số năm kinh nghiệm:
+        - Giới hạn quét trong phạm vi mục Kinh nghiệm làm việc để tránh nhầm với số năm Đại học/Học vấn.
+        - Hỗ trợ toàn diện tên tháng tiếng Anh (May, November...) và tiếng Việt (Tháng 5...).
+        - Khử trùng lặp (Interval Merging) giữa các dự án/công việc làm song song.
+        """
         experiences: List[CandidateWorkExperience] = []
-        total_years = 0.0
 
-        # Tìm các đoạn năm làm việc dạng "2021 - 2024", "05/2019 - Hiện tại", "2020 - Present"
+        # 1. Tách riêng phân vùng 'Kinh nghiệm làm việc' (nếu có đề mục rõ ràng)
+        work_headers = [
+            "Kinh nghiệm làm việc", "Kinh nghiệm", "Quá trình làm việc", "Lịch sử làm việc",
+            "Work Experience", "Experience", "Employment History", "Professional Experience",
+        ]
+        stop_headers = [
+            "Học vấn", "Trình độ học vấn", "Bằng cấp", "Education", "Academic Background",
+            "Kỹ năng", "Kỹ năng chuyên môn", "Skills", "Technical Skills", "Additional Skills",
+            "Dự án", "Dự án tiêu biểu", "Projects", "Key Projects",
+            "Chứng chỉ", "Chứng nhận", "Certifications", "Certificates",
+            "Sở thích", "Hoạt động", "Giải thưởng", "Awards", "Activities", "Interests",
+        ]
+        t_join = "|".join(re.escape(h) for h in work_headers)
+        s_join = "|".join(re.escape(h) for h in stop_headers)
+        start_pattern = r"(?:^|\n)\s*(?:" + t_join + r")\s*[:\-]?(?:\n|\Z)"
+        stop_pattern = r"(?:^|\n)\s*(?:" + s_join + r")\s*[:\-]?(?:\n|\Z)"
+
+        start_m = re.search(start_pattern, text, re.IGNORECASE)
+        if start_m:
+            work_text = text[start_m.end():]
+            stop_m = re.search(stop_pattern, work_text, re.IGNORECASE)
+            if stop_m:
+                work_text = work_text[:stop_m.start()]
+        else:
+            work_text = text
+
+        MONTH_MAP = {
+            "jan": 1, "january": 1, "tháng 1": 1, "thg 1": 1, "t1": 1,
+            "feb": 2, "february": 2, "tháng 2": 2, "thg 2": 2, "t2": 2,
+            "mar": 3, "march": 3, "tháng 3": 3, "thg 3": 3, "t3": 3,
+            "apr": 4, "april": 4, "tháng 4": 4, "thg 4": 4, "t4": 4,
+            "may": 5, "tháng 5": 5, "thg 5": 5, "t5": 5,
+            "jun": 6, "june": 6, "tháng 6": 6, "thg 6": 6, "t6": 6,
+            "jul": 7, "july": 7, "tháng 7": 7, "thg 7": 7, "t7": 7,
+            "aug": 8, "august": 8, "tháng 8": 8, "thg 8": 8, "t8": 8,
+            "sep": 9, "sept": 9, "september": 9, "tháng 9": 9, "thg 9": 9, "t9": 9,
+            "oct": 10, "october": 10, "tháng 10": 10, "thg 10": 10, "t10": 10,
+            "nov": 11, "november": 11, "tháng 11": 11, "thg 11": 11, "t11": 11,
+            "dec": 12, "december": 12, "tháng 12": 12, "thg 12": 12, "t12": 12,
+        }
+        month_regex = (
+            r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+            r"aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|"
+            r"tháng\s*\d{1,2}|thg\s*\d{1,2}|0?[1-9]|1[0-2])"
+        )
+
         exp_pattern = re.compile(
-            r"(?:(?:0?[1-9]|1[0-2])[\/\.-])?((?:19|20)\d{2})\s*(?:[-–—tođến]|hết)\s*(?:(?:(?:0?[1-9]|1[0-2])[\/\.-])?((?:19|20)\d{2})|nay|hiện tại|present|current)",
+            rf"(?:({month_regex})[\s\/\.-]+)?((?:19|20)\d{{2}})\s*(?:[-–—tođến]|hết)\s*"
+            rf"(?:(?:({month_regex})[\s\/\.-]+)?((?:19|20)\d{{2}})|(nay|hiện tại|present|current))",
             re.IGNORECASE,
         )
 
-        matches = list(exp_pattern.finditer(text))
+        current_year = 2026
+        current_month = 5
+        intervals: List[Tuple[int, int]] = []
+
+        matches = list(exp_pattern.finditer(work_text))
         for m in matches:
-            start_year = int(m.group(1))
-            end_val = m.group(2)
-            current_year = 2026
-            end_year = int(end_val) if end_val and end_val.isdigit() else current_year
-            diff = max(0.5, float(end_year - start_year))
-            total_years += diff
+            start_m_str, start_y_str, end_m_str, end_y_str, present_str = m.groups()
+            start_y = int(start_y_str)
+            start_m_val = MONTH_MAP.get(start_m_str.lower(), 1) if start_m_str else 1
+
+            if present_str:
+                end_y = current_year
+                end_m_val = current_month
+            else:
+                end_y = int(end_y_str) if end_y_str else current_year
+                end_m_val = MONTH_MAP.get(end_m_str.lower(), 12) if end_m_str else 12
+
+            start_month_index = start_y * 12 + start_m_val
+            end_month_index = max(start_month_index + 1, end_y * 12 + end_m_val)
+            intervals.append((start_month_index, end_month_index))
+
+            duration_years = round(max(0.5, (end_month_index - start_month_index) / 12), 1)
 
             # Lấy ngữ cảnh xung quanh mốc thời gian để làm snippet
             start_pos = max(0, m.start() - 60)
-            end_pos = min(len(text), m.end() + 150)
-            context = text[start_pos:end_pos].strip()
+            end_pos = min(len(work_text), m.end() + 150)
+            context = work_text[start_pos:end_pos].strip()
 
             experiences.append(
                 CandidateWorkExperience(
                     company="Doanh nghiệp / Dự án",
                     role="Chuyên viên / Kỹ sư",
-                    duration_years=diff,
+                    duration_years=duration_years,
                     description=context,
                 )
             )
 
-        # Nếu không trích được theo mốc năm, quét cụm từ "X năm kinh nghiệm"
-        if total_years == 0.0:
-            exp_text_match = re.search(r"(\d+(?:\.\d+)?)\s*\+?\s*năm(?:\s*kinh\s*nghiệm)?", text, re.IGNORECASE)
-            if exp_text_match:
-                total_years = float(exp_text_match.group(1))
+        # 2. Hợp nhất các khoảng thời gian bị overlap để tính tổng số năm chuẩn xác
+        total_years = 0.0
+        if intervals:
+            intervals.sort(key=lambda x: (x[0], x[1]))
+            merged: List[List[int]] = []
+            for s, e in intervals:
+                if not merged or merged[-1][1] < s:
+                    merged.append([s, e])
+                else:
+                    merged[-1][1] = max(merged[-1][1], e)
+            total_months = sum(e - s for s, e in merged)
+            total_years = round(total_months / 12, 1)
+
+        # 3. Quét các câu khẳng định số năm kinh nghiệm ở phần tóm tắt/mục tiêu (cả tiếng Anh & Việt)
+        exp_text_match = re.search(
+            r"(\d+(?:\.\d+)?)\s*\+?\s*(?:năm|years?|yrs?)(?:\s*(?:kinh\s*nghiệm|trong\s*nghề|(?:of\s*)?experience))?",
+            text,
+            re.IGNORECASE,
+        )
+        if exp_text_match:
+            stated_years = float(exp_text_match.group(1))
+            # Nếu mốc tính toán chưa có hoặc mốc tự khai lớn hơn một cách hợp lý
+            if total_years == 0.0 or (stated_years > total_years and stated_years <= total_years + 2.0):
+                total_years = max(total_years, stated_years)
 
         # Ước tính trần kinh nghiệm hợp lý
         est_years = round(min(30.0, total_years), 1) if total_years > 0 else None
@@ -406,9 +548,10 @@ class CVScorer:
             min_years = crit.min_years or 1.0
             candidate_years = profile.total_experience_years_estimated or 0.0
 
-            if candidate_years >= min_years:
+            # Cho phép dung sai làm tròn tháng nhỏ (<= 0.2 năm ~ 2 tháng)
+            if candidate_years >= (min_years - 0.2):
                 evidence = f"Hồ sơ ghi nhận ước tính {candidate_years} năm kinh nghiệm làm việc thực tế."
-                return 100.0, True, evidence, f"Đạt và vượt yêu cầu kinh nghiệm tối thiểu ({min_years} năm)."
+                return 100.0, True, evidence, f"Đạt yêu cầu kinh nghiệm tối thiểu ({candidate_years}/{min_years} năm)."
             elif candidate_years > 0:
                 score = round((candidate_years / min_years) * 80.0, 1)
                 evidence = f"Hồ sơ ghi nhận {candidate_years} năm kinh nghiệm, thấp hơn mức yêu cầu {min_years} năm."

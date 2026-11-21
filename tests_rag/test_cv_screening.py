@@ -135,6 +135,26 @@ def test_cv_extractor_candidate_info():
     assert len(profile.candidate_info.links) >= 1
     assert any("github.com/annguyen-dev" in l for l in profile.candidate_info.links)
 
+    # Test trích xuất số điện thoại cố định (Hà Nội 024, HCM 028) và quốc tế (+84)
+    topcv_sample = """
+    Lê Chiến
+    Lập trình viên
+    Điện thoại: (024) 6680 5588
+    Email: lechien@example.com
+    Địa chỉ: Quận Đống Đa, Hà Nội
+    """
+    p_topcv = CVExtractor.extract_profile(topcv_sample)
+    assert p_topcv.candidate_info.phone == "(024) 6680 5588"
+    assert p_topcv.candidate_info.full_name == "Lê Chiến"
+
+    intl_sample = """
+    Hoàng Lê Quân
+    Mobile: +84 987 654 321
+    Email: quan.hoang@example.com
+    """
+    p_intl = CVExtractor.extract_profile(intl_sample)
+    assert p_intl.candidate_info.phone == "+84 987 654 321"
+
 
 def test_cv_extractor_skills_and_experience():
     profile = CVExtractor.extract_profile(SAMPLE_CV_SENIOR_PYTHON)

@@ -1,17 +1,35 @@
 """
 core module
-Cấu hình hệ thống (Settings) và Ngoại lệ phân cấp (Domain Exceptions).
+Cấu hình hệ thống (Settings), Ngoại lệ phân cấp (Domain Exceptions),
+và Schemas dữ liệu cho RAG & CV Screening.
 """
 
 from core.config import Settings, get_settings
+from core.cv_schemas import (
+    CandidateEducation,
+    CandidateInfo,
+    CandidateWorkExperience,
+    CriterionEvaluation,
+    CriterionType,
+    CVScreeningResult,
+    JobCriteria,
+    JobCriterion,
+    MatchRating,
+    StructuredCandidateProfile,
+)
 from core.exceptions import (
     BaseRAGException,
     CollectionNotFoundError,
+    CVExtractionError,
+    CVLoadError,
+    CVScoringError,
+    CVScreeningError,
     DocumentIngestionError,
     DocumentLoadError,
     DocumentNotFoundError,
     DocumentSplitError,
     DuplicateDocumentError,
+    InvalidCriteriaError,
     InvalidRetrieverStrategyError,
     LLMGenerationError,
     RetrieverError,
@@ -37,5 +55,20 @@ __all__ = [
     "InvalidRetrieverStrategyError",
     "DocumentNotFoundError",
     "LLMGenerationError",
+    "CVScreeningError",
+    "CVLoadError",
+    "InvalidCriteriaError",
+    "CVExtractionError",
+    "CVScoringError",
     "setup_exception_handlers",
+    "CriterionType",
+    "MatchRating",
+    "JobCriterion",
+    "JobCriteria",
+    "CandidateInfo",
+    "CandidateWorkExperience",
+    "CandidateEducation",
+    "StructuredCandidateProfile",
+    "CriterionEvaluation",
+    "CVScreeningResult",
 ]

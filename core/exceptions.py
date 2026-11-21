@@ -284,6 +284,100 @@ class LLMGenerationError(BaseRAGException):
 
 
 # ============================================================================
+# Nhóm 5: Ngoại lệ Sàng lọc CV (CV Screening Domain)
+# ============================================================================
+
+class CVScreeningError(BaseRAGException):
+    """Lỗi chung phát sinh trong quá trình xử lý và sàng lọc CV ứng viên."""
+
+    def __init__(
+        self,
+        message: str,
+        error_code: str = "CV_SCREENING_ERROR",
+        status_code: int = 400,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(message, error_code=error_code, status_code=status_code, details=details)
+
+
+class CVLoadError(CVScreeningError):
+    """Lỗi khi tải hoặc đọc nội dung hồ sơ CV."""
+
+    def __init__(
+        self,
+        file_path_or_info: str,
+        reason: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        message = f"Không thể tải hoặc đọc nội dung CV '{file_path_or_info}': {reason}"
+        det = details or {}
+        det.update({"file_info": file_path_or_info, "reason": reason})
+        super().__init__(
+            message=message,
+            error_code="CV_LOAD_FAILED",
+            status_code=422,
+            details=det,
+        )
+
+
+class InvalidCriteriaError(CVScreeningError):
+    """Lỗi khi bộ tiêu chí tuyển dụng không hợp lệ."""
+
+    def __init__(
+        self,
+        reason: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        message = f"Bộ tiêu chí tuyển dụng không hợp lệ: {reason}"
+        det = details or {}
+        det.update({"reason": reason})
+        super().__init__(
+            message=message,
+            error_code="INVALID_JOB_CRITERIA",
+            status_code=422,
+            details=det,
+        )
+
+
+class CVExtractionError(CVScreeningError):
+    """Lỗi khi bóc tách thông tin ứng viên từ văn bản CV."""
+
+    def __init__(
+        self,
+        reason: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        message = f"Lỗi bóc tách thông tin hồ sơ CV: {reason}"
+        det = details or {}
+        det.update({"reason": reason})
+        super().__init__(
+            message=message,
+            error_code="CV_EXTRACTION_FAILED",
+            status_code=500,
+            details=det,
+        )
+
+
+class CVScoringError(CVScreeningError):
+    """Lỗi khi tính điểm hoặc đối chiếu tiêu chí ứng viên."""
+
+    def __init__(
+        self,
+        reason: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        message = f"Lỗi đánh giá và chấm điểm CV: {reason}"
+        det = details or {}
+        det.update({"reason": reason})
+        super().__init__(
+            message=message,
+            error_code="CV_SCORING_FAILED",
+            status_code=500,
+            details=det,
+        )
+
+
+# ============================================================================
 # FastAPI Exception Handler Registration Helper
 # ============================================================================
 
